@@ -1,4 +1,4 @@
-import { Request, Response } from "express";
+import { NextFunction, Request, Response } from "express";
 import {z} from 'zod'
 import dotenv from 'dotenv';
 
@@ -6,8 +6,16 @@ dotenv.config();
 import jwt, { Secret } from 'jsonwebtoken';
 import { cloudinary } from '../utils/cloudinary'
 
-import { PrismaClient } from '@prisma/client';
+import { Category, PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
+
+declare global {
+    namespace Express {
+        interface Request {
+            user?: any;
+        }
+    }
+}
 
 
 const itemSchema = z.object({
@@ -16,49 +24,83 @@ const itemSchema = z.object({
     description: z.string().min(10).max(10000),
 })
 
+const authenticate = (req: Request, res: Response, next: NextFunction) => {
+    // const token = req.header('Authorization')?.replace('Bearer ', '');
+    const token = req.header('Authorization');
+
+    if (!token) {
+        return res.status(401).json({ message: 'Unauthorized: Missing token' });
+    }
+
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET as Secret);
+        req.user = decoded;
+        next();
+    } catch (error) {
+        return res.status(401).json({ message: 'Unauthorized: Invalid token' });
+    }
+};
+
+const authorizedProductUpload = (req: Request, res: Response, next: NextFunction) => {
+    if(req.user.payload.role !== 'seller') {
+        return res.status(403).json({ message: 'Forbidden: Only seller can upload products' });
+    }
+    next();
+};
+
+
 export const ProductControllerWithImage = async(req: Request, res: Response): Promise<void> => {
     try {
-        let result
 
-        if(req.file) {
-            result = await cloudinary.uploader.upload(req.file.path);
-        } else {
-            result = await cloudinary.uploader.upload(req.body.filePath);
-        }
+        authenticate(req, res, async() => {
+            authorizedProductUpload(req, res, async() => {
 
-        const {category } = req.body as {category: string};
 
-        const sellerId = parseInt(req.body.sellerId)
+
+                let result
+
+                if(req.file) {
+                    result = await cloudinary.uploader.upload(req.file.path);
+                } else {
+                    result = await cloudinary.uploader.upload(req.body.filePath);
+                }
         
+                const {category } = req.body as {category: Category};
+        
+                const sellerId = parseInt(req.body.sellerId)
+                
+        
+                const parsedInput = itemSchema.safeParse(req.body);
+                if(!parsedInput.success) {
+                    res.status(411).json({
+                        error: parsedInput.error
+                    })
+                    return;
+                }
+        
+                const name = parsedInput.data.name;
+                const price = parsedInput.data.price;
+                const description = parsedInput.data.description;
+        
+                const newFile = await prisma.product.create({
+                    data: {
+                        sellerId: sellerId,
+                        name: name,
+                        price: price,
+                        description: description,
+                        category: category,
+                        cloudinaryUrl: result.secure_url,
+                    }
+                })
+        
+                res.status(200).json({
+                    success: true,
+                    data: newFile,
+                    message: 'Entry Created Successfully'
+                });
 
-        const parsedInput = itemSchema.safeParse(req.body);
-        if(!parsedInput.success) {
-            res.status(411).json({
-                error: parsedInput.error
             })
-            return;
-        }
-
-        const name = parsedInput.data.name;
-        const price = parsedInput.data.price;
-        const description = parsedInput.data.description;
-
-        const newFile = await prisma.product.create({
-            data: {
-                sellerId: sellerId,
-                name: name,
-                price: price,
-                description: description,
-                category: category,
-                cloudinaryUrl: result.secure_url,
-            }
         })
-
-        res.status(200).json({
-            success: true,
-            data: newFile,
-            message: 'Entry Created Successfully'
-        });
 
     }
     catch(error) {
@@ -69,6 +111,60 @@ export const ProductControllerWithImage = async(req: Request, res: Response): Pr
         })
     }
 }
+
+
+
+const authorizedAddToCart = (req: Request, res: Response, next: NextFunction) => {
+    if(req.user.payload.role !== 'customer') {
+        return res.status(403).json({ message: 'Forbidden: Only customer can upload products' });
+    }
+    next();
+}
+
+
+
+export const addProductToCart = async(req: Request, res: Response): Promise<void> => {
+
+    authenticate(req, res, async() => {
+        authorizedAddToCart(req, res, async() => {
+            try {
+                const {custId, prodId} = req.body
+        
+        
+                const updatedCustCart = await prisma.customer.update({
+                    where: {
+                        id: custId
+                    },
+                    data: {
+                        cart: {
+                            push: prodId
+                        }
+                    }
+                })
+                
+                res.status(200).json({
+                    success: true,
+                    data: updatedCustCart,
+                    message: 'Product added to cart successfully'
+                })
+        
+            }
+            catch (error) {
+                console.log("Error: ", error);
+                 res.status(500).json({
+                    success: false,
+                    message: 'Error Adding the Product to the cart'
+                });
+            }
+
+        })
+    })
+
+}
+
+
+
+
 
 export const GetAllProducts = async(req: Request, res: Response): Promise<void> => {
     try {
@@ -91,15 +187,18 @@ export const GetAllProducts = async(req: Request, res: Response): Promise<void> 
 
 export const getProductByCategory = async(req: Request, res: Response): Promise<void> => {
     try {
-        const categoryQuery = req.params.categoryQuery
+        const categoryQuery: Category = req.params.categoryQuery as Category;
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = parseInt(req.query.limit as string) || 5;
+
+        const offset  = (page - 1) * limit;
 
         const products = await prisma.product.findMany({
             where: {
-                category: {
-                    equals: categoryQuery,
-                    mode: 'insensitive'
-                }
-            }
+                category: categoryQuery
+            },
+            skip: offset,
+            take: limit
         })
 
         if(products.length === 0) {
@@ -125,9 +224,41 @@ export const getProductByCategory = async(req: Request, res: Response): Promise<
     }
 }
 
+export const getProductPagination = async(req: Request, res: Response): Promise<void> => {
+    try {
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = parseInt(req.query.limit as string) || 5;
+
+        const offset = (page - 1) * limit;
+
+        const allProducts = await prisma.product.findMany({
+            skip: offset,
+            take: limit
+        });
+
+        res.status(200).json({
+            success: true,
+            data: allProducts,
+            message: 'This is entire Product List'
+        });
+    }
+    catch(error) {
+        console.log("Error", error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching Product by pagination method'
+        });
+    }
+}
+
+
 export const getProductByName = async(req: Request, res: Response): Promise<void> => {
     try {
         const searchQuery = req.params.searchQuery
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = parseInt(req.query.limit as string) || 5;
+
+        const offset = (page - 1) * limit;
 
         const products = await prisma.product.findMany({
             where: {
@@ -135,8 +266,10 @@ export const getProductByName = async(req: Request, res: Response): Promise<void
                     contains: searchQuery,
                     mode: 'insensitive'
                 }
-            }
-        })
+            },
+            skip: offset,
+            take: limit
+        });
 
         if(!products) {
             res.status(404).json({
@@ -195,36 +328,6 @@ export const getProductById = async(req: Request, res: Response): Promise<void> 
 }
 
 
-export const addProductToCart = async(req: Request, res: Response): Promise<void> => {
-    try {
-        const { custId, prodId } = req.body;
-
-        const updatedCustCart = await prisma.customer.update({
-            where: {
-                id: custId
-            },
-            data: {
-                cart: {
-                    push: parseInt(prodId)
-                }
-            }
-        });
-        
-        res.status(200).json({
-            success: true,
-            data: updatedCustCart,
-            message: 'Product added to cart successfully'
-        })
-
-    }
-    catch (error) {
-        console.log("Error: ", error);
-         res.status(500).json({
-            success: false,
-            message: 'Error Adding the Product to the cart'
-        });
-    }
-}
 
 
 export const deleteCartItems = async(req: Request, res: Response): Promise<void> => {
@@ -233,7 +336,7 @@ export const deleteCartItems = async(req: Request, res: Response): Promise<void>
 
         const customer = await prisma.customer.findUnique({
             where: {
-                id: custId
+                id: parseInt(custId)
             }
         });
 
@@ -247,7 +350,7 @@ export const deleteCartItems = async(req: Request, res: Response): Promise<void>
 
         const updatedCustomer = await prisma.customer.update({
             where: {
-                id: custId
+                id: parseInt(custId)
             },
             data: {
                 cart: {

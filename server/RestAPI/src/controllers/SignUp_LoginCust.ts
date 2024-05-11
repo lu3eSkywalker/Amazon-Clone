@@ -102,11 +102,13 @@ export const login = async(req: Request<{ email: string, password: string }>, re
             return
         }
 
+        const role = 'customer'
 
         const payload = {
             email: user.email,
             name: user.name,
             id: user.id,
+            role
         }
 
         const compare = await bcrypt.compare(password, user.password)
@@ -117,7 +119,7 @@ export const login = async(req: Request<{ email: string, password: string }>, re
             res.status(200).json({
                 success: true,
                 data: user,
-                token,
+                data2: token,
                 message: "Logged in successfully"
             });
         } else {
@@ -171,4 +173,31 @@ export const getUserProfile = async(req: Request, res: Response): Promise<void> 
           message: "Internal Server Error",
         });
       }
+}
+
+
+export const logout = async(req: Request, res: Response): Promise<void> => {
+    try {
+        const token = req.headers.authorization?.split(' ')[1] ?? '';
+
+        await prisma.blacklistedtoken.create({
+            data: {
+                token: token,
+                createdAt: new Date()
+            }
+        });
+
+        res.status(200).json({
+            success: true,
+            message: 'User Logged out successfully'
+        })
+        
+    }
+    catch(error) {
+        console.log("Error", error);
+        res.status(500).json({
+            success: false,
+            message: "Internal server Error"
+        })
+    }
 }

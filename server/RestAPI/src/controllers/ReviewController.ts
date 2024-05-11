@@ -1,7 +1,9 @@
 import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
-import { Request, Response } from "express";
+import { NextFunction, Request, Response } from "express";
+import jwt, { Secret } from 'jsonwebtoken';
+
 import {z} from "zod";
 
 
@@ -10,42 +12,73 @@ const ReviewSchema = z.object({
 })
 
 
-export const postReviewOnProduct = async(req: Request, res: Response): Promise<void> => {
+const authenticate = (req: Request, res: Response, next: NextFunction) => {
+    const token = req.header('Authorization');
+
+    if(!token) {
+        return res.status(401).json({ message: 'Unauthorized: Missing token' });
+    }
+
     try {
-        const {custId, prodId} = req.body as {custId: number, prodId: number}
+        const decoded = jwt.verify(token, process.env.JWT_SECRET as Secret);
+        req.user = decoded;
+        next();
+    } catch(error) {
+        return res.status(401).json({ message: 'Unauthorized: Invalid token' });
+    }
+};
 
-        const parsedReview = ReviewSchema.safeParse(req.body);
-        if(!parsedReview.success) {
-            res.status(411).json({
-                error: parsedReview.error
-            })
-            return;
-        }
+const authorizedProductReview = (req: Request, res: Response, next: NextFunction) => {
+    if(req.user.payload.role !== 'customer') {
+        return res.status(403).json({ message: 'Forbidden Only Seller can upload products' });
+    }
+    next();
+};
 
-        const review = parsedReview.data.review;
 
-        const prodReview = await prisma.review.create({
-            data: {
-                custId: custId,
-                prodId: prodId,
-                review: review
+export const postReviewOnProduct = async(req: Request, res: Response): Promise<void> => {
+
+    authenticate(req, res, async() => {
+        authorizedProductReview(req, res, async() => {
+
+            try {
+                const {custId, prodId} = req.body as {custId: number, prodId: number}
+        
+                const parsedReview = ReviewSchema.safeParse(req.body);
+                if(!parsedReview.success) {
+                    res.status(411).json({
+                        error: parsedReview.error
+                    })
+                    return;
+                }
+        
+                const review = parsedReview.data.review;
+        
+                const prodReview = await prisma.review.create({
+                    data: {
+                        custId: custId,
+                        prodId: prodId,
+                        review: review
+                    }
+                })
+        
+                res.status(200).json({
+                    success: true,
+                    data: prodReview,
+                    message: 'Entry Created Successfully'
+                });
+        
             }
+            catch (error) {
+                console.log("Error: ", error);
+                res.status(500).json({
+                    success: false,
+                    message: 'Error Posting the Review'
+                });
+            }
+
         })
-
-        res.status(200).json({
-            success: true,
-            data: prodReview,
-            message: 'Entry Created Successfully'
-        });
-
-    }
-    catch (error) {
-        console.log("Error: ", error);
-        res.status(500).json({
-            success: false,
-            message: 'Error Posting the Review'
-        });
-    }
+    })
 }
 
 export const getReviewByProdId = async(req: Request, res: Response): Promise<void> => {
@@ -99,7 +132,6 @@ export const getReviewofCust = async(req: Request, res: Response): Promise<void>
             })
             return;
         }
-
 
         res.status(200).json({
             success: true,

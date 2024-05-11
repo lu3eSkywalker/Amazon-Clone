@@ -8,7 +8,7 @@ import jwt, { Secret } from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
-const secretjwt: string = process.env.JWT_SECRET || ''
+const secretjwt: string = process.env.JWT_SECRET || 'amazon'
 
 
 const SignupSellerSchema = z.object({
@@ -114,10 +114,13 @@ export const loginSeller = async(req: Request<{ email: string; password: string 
             return;
         }
 
+        const role = 'seller'
+
         const payload = {
             email: user.email,
             name: user.name,
             id: user.id,
+            role
         }
 
         const compare = await bcrypt.compare(password, user.password)
@@ -128,7 +131,7 @@ export const loginSeller = async(req: Request<{ email: string; password: string 
             res.status(200).json({
                 success: true,
                 data: user,
-                token,
+                data2: token,
                 message: "Logged In successfully"
             });
         } else {

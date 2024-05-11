@@ -1,9 +1,10 @@
 import express from 'express';
-import { getUserProfile, login, signupcust } from '../controllers/SignUp_LoginCust';
+import { getUserProfile, login, logout, signupcust } from '../controllers/SignUp_LoginCust';
 import { getReviewByProdId, getReviewofCust, postReviewOnProduct } from '../controllers/ReviewController';
 import { getSellerProfile, loginSeller, signupseller } from '../controllers/SignUp_LoginSeller';
 import upload from '../middleware/multer';
-import { GetAllProducts, ProductControllerWithImage, addProductToCart, deleteCartItems, deleteWholeCart, getProductByCategory, getProductById, getProductByName } from '../controllers/ProductController';
+import { GetAllProducts, ProductControllerWithImage, addProductToCart, deleteCartItems, deleteWholeCart, getProductByCategory, getProductById, getProductByName, getProductPagination } from '../controllers/ProductController';
+import { fetchOrderByStatus, postOrder } from '../controllers/OrderController';
 
 const router: express.Router = express.Router();
 
@@ -14,8 +15,15 @@ router.post('/loginseller', loginSeller);
 router.post('/uploadreview', postReviewOnProduct)
 router.post('/upload', upload.single('image'), ProductControllerWithImage)
 router.post('/addtocart', addProductToCart);
+router.post('/createorder', postOrder)
+router.post('/getorder', fetchOrderByStatus)
+router.post('/logout', logout)
+
 router.post('/deletecartItems', deleteCartItems)
 router.post('/deletewholecart', deleteWholeCart)
+
+
+router.get('/productPagination', getProductPagination)
 
 
 router.get('/custprofile/:custId', getUserProfile);
